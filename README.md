@@ -1,0 +1,12 @@
+一、解决的核心痛点
+1. 运营效率瓶颈：内容发布、数据采集、报告编写等重复工作依赖人工逐项操作，多平台并行时时间被碎片化消耗。系统交由多个专业化Agent自动执行，各Agent独立运行于各自线程，实现7×24小时不间断作业。
+2. 多平台协同割裂：同一运营活动需覆盖微信、微博、邮件等多渠道，人工操作易出现内容不一致或遗漏。消息总线作为通信中枢，Scheduler统一调度后按platforms字段分发子任务，确保步调一致。
+3. 监控响应滞后：业务异常若未及时发现会造成持续损失。MonitorAgent每30秒采集CPU/内存指标，与预设阈值比对，越限立即发布告警，NotificationAgent按配置渠道推送通知。
+4. 调度灵活性不足：不同任务时效要求各异（即时、定时、周期），硬编码难以适配。调度策略外置为YAML配置，每种任务可独立设置trigger类型和执行参数，改配置即可调整行为。
+5. 运行状态不可观测：后台脚本如同黑盒，问题只能事后排查日志。Web Dashboard基于Flask+SocketIO构建，实时展示资源占用、Agent状态、任务记录，通过WebSocket毫秒级推送更新。
+二、核心逻辑流
+启动阶段：入口脚本读取system.yaml全局参数，实例化MessageBus消息中间件和TaskQueue任务队列，创建五个Agent并注入同一MessageBus引用使它们具备互相通信能力，各Agent启动独立守护线程，Flask服务挂载主线程监听5000端口。
+任务进入系统有两条路径：一是用户POST /api/tasks提交即时任务；二是Scheduler启动时解析tasks.yaml批量载入预定义任务。Scheduler维护循环检查队列中到达执行时间的任务，根据type字段确定目标Agent，经MessageBus投递task_assigned消息。
+以内容生成为例的完整链路：Scheduler发现type=content_generation的任务到期，发布task_assigned消息携带agent_name=ContentAgent；ContentAgent订阅该主题，校验名称匹配后标记状态为busy，调用generate_content依据topic和platforms生成内容，以task_completed主题发布结果，重置状态为idle。其他Agent遵循相同订阅-执行-发布模式。
+监控告警链路：MonitorAgent内含30秒周期的循环节拍，每次唤醒调用psutil采集CPU和内存占用率，与yaml中的阈值比较，任一越限即发送alert消息。NotificationAgent订阅alert主题，收到后遍历配置的通知渠道依次执行——console打印到标准输出，email通过SMTP发送，webhook发起HTTP POST。
+前端实时通信：Dashboard单页HTML嵌入SocketIO客户端，浏览器建立WebSocket连接后订阅status_update、agents_update、task_update三个频道，服务端检测到状态变更时主动广播增量数据，前端接收事件后局部更新DOM节点数值与样式颜色，无需整页刷新即呈现最新状态。
